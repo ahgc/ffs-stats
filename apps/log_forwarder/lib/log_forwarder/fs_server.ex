@@ -13,12 +13,14 @@ defmodule LogForwarder.FsServer do
   # Will store the last file and line read in the log directory with this name.
   @state_file_name ".ffs_stats_log_forwarder_head"
 
+  @file_reader Application.get_env(:fs_server, :file_reader, File)
+
   @doc """
   Start a linked `GenServer` that watches the specified `log_dir` for new logs.
   """
-  @spec start_link(String.t, [term]) :: GenServer.on_start
-  def start_link(log_dir, opts \\ []) do
-    GenServer.start_link(__MODULE__, log_dir, opts)
+  @spec start_link(String.t, atom, [term]) :: GenServer.on_start
+  def start_link(log_dir, forwarder, opts \\ []) do
+    GenServer.start_link(__MODULE__, [log_dir, forwarder], opts)
   end
 
   @doc """
@@ -27,28 +29,32 @@ defmodule LogForwarder.FsServer do
   Reads the log head from disk (either the store state file or the most recent
   log stamp) configures the FS watcher for the specified `log_dir`.
   """
-  @spec init(String.t) :: {:ok, map}
-  def init(log_dir) do
+  @spec init([term]) :: {:ok, map}
+  def init([log_dir, forwarder]) do
     {head_stamp, head_idx, head_line} = log_head(log_dir)
-
 
     Logger.info("Initializing FsServer at #{log_name(head_stamp, head_idx)}@#{head_line}")
 
     # TODO: I'm not sure how to make this process wait for the forwarder to
     # start up so sleeping is the right way to fix that, right? Right? Guys?
     # (I'm so, so sorry.)
-    Process.sleep(1000)
+    # Process.sleep(1000)
 
     # Initialize the state and go ahead and read any available lines.
     state = %{
-        log_dir: log_dir,
-        log_pointer: {head_stamp, head_idx, head_line}
+      forwarder: forwarder,
+      log_dir: log_dir,
+      log_pointer: {head_stamp, head_idx, head_line}
     }
     |> read_lines()
 
-    # Now that we're caught up, configure the filesystem watcher.
-    :fs.start_link(:fs_watcher, log_dir)
-    :fs.subscribe(:fs_watcher)
+
+    if Application.get_env(:fs_server, :use_file_watcher, true) do
+      # Now that we're caught up, configure the filesystem watcher.
+      Logger.info("Starting the filesystem watcher in dir #{log_dir}")
+      :fs.start_link(:fs_watcher, log_dir)
+      :fs.subscribe(:fs_watcher)
+    end
 
     {:ok, state}
   end
@@ -71,8 +77,8 @@ defmodule LogForwarder.FsServer do
   @spec read_state_file(String.t) :: nil | log_pointer
   defp read_state_file(log_dir) do
     path = Path.join(log_dir, @state_file_name)
-    if File.exists?(path) do
-      File.read!(path)
+    if @file_reader.exists?(path) do
+      @file_reader.read!(path)
       |> :erlang.binary_to_term()
     else
       nil
@@ -83,7 +89,7 @@ defmodule LogForwarder.FsServer do
   @spec write_state_file(map) :: :ok | {:error, File.posix}
   defp write_state_file(state) do
     path = Path.join(state.log_dir, @state_file_name)
-    File.write(path, :erlang.term_to_binary(state.log_pointer))
+    @file_reader.write(path, :erlang.term_to_binary(state.log_pointer))
   end
 
   # Calculate the current log head using the file if it exists or by examining
@@ -115,7 +121,7 @@ defmodule LogForwarder.FsServer do
   @spec get_files_for_mission(String.t, nil | String.t) ::
         [{String.t, non_neg_integer}]
   defp get_files_for_mission(log_dir, head_stamp) do
-    {:ok, files} = File.ls(log_dir)
+    {:ok, files} = @file_reader.ls(log_dir)
 
     head_stamp_filter = fn {stamp, _} ->
       is_nil(head_stamp) or stamp == head_stamp
@@ -206,7 +212,7 @@ defmodule LogForwarder.FsServer do
     # Open the current head log file, drop the lines we've already read, and get
     # a list of the remaining lines.
     batch = log_path(log_dir, stamp, log_idx)
-    |> File.stream!()
+    |> @file_reader.stream!()
     |> Stream.drop(head_line)
     |> Enum.to_list()
 
@@ -215,13 +221,13 @@ defmodule LogForwarder.FsServer do
       Logger.info("Enqueuing #{length(batch)} entries from #{log_name(stamp, log_idx)} at #{head_line}")
 
       :ok =
-        LogForwarder.Forwarder.enqueue_log_batch(LogForwarder.Forwarder, batch)
+        LogForwarder.Forwarder.enqueue_log_batch(state.forwarder, batch)
     end
 
     cond do
       # If the next file exists, update the log pointer to start at the
       # beginning of the next file, and recursively read that file.
-      File.exists?(log_path(log_dir, stamp, log_idx + 1)) ->
+      @file_reader.exists?(log_path(log_dir, stamp, log_idx + 1)) ->
         Map.put(state, :log_pointer, {stamp, log_idx + 1, 0})
         |> read_lines()
       # If the next file doesn't exist and we read some lines, update the log

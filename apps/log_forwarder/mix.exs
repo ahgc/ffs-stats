@@ -7,7 +7,9 @@ defmodule LogForwarder.MixProject do
       version: "0.1.0",
       elixir: "~> 1.6",
       start_permanent: Mix.env() == :prod,
-      deps: deps()
+      deps: deps(),
+      aliases: aliases(),
+      elixirc_paths: elixirc_paths(Mix.env()),
     ]
   end
 
@@ -19,10 +21,19 @@ defmodule LogForwarder.MixProject do
     ]
   end
 
+  defp elixirc_paths(:test), do: ["lib", "test/support"]
+  defp elixirc_paths(_), do: ["lib"]
+
   # Run "mix help deps" to learn about dependencies.
   defp deps do
     [
       {:fs, "~> 3.4"},
+    ]
+  end
+
+  defp aliases do
+    [
+      test: "test --no-start"
     ]
   end
 end

@@ -14,7 +14,7 @@ defmodule LogForwarder.Application do
     # List all child processes to be supervised
     children = [
       worker(LogForwarder.Forwarder, [remote, [name: LogForwarder.Forwarder]]),
-      worker(LogForwarder.FsServer, [log_dir]),
+      worker(LogForwarder.FsServer, [log_dir, LogForwarder.Forwarder]),
     ]
 
     # See https://hexdocs.pm/elixir/Supervisor.html
