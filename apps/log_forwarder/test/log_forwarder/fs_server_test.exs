@@ -28,7 +28,7 @@ defmodule LogForwarder.FsServerTest do
     assert length(batch) == 1
   end
 
-  @tag dir: "/test-init2"
+  @tag dir: "/test-init-many"
   test "init reads all logs", %{forwarder: forwarder} do
     queue = LogForwarder.Test.ForwarderMock.get_queue(forwarder)
     assert Queue.len(queue) == 2
@@ -40,4 +40,24 @@ defmodule LogForwarder.FsServerTest do
     assert length(batch) == 1
   end
 
+  @tag dir: "/test-init-resume"
+  test "init resumes from saved pointer", %{forwarder: forwarder} do
+    queue = LogForwarder.Test.ForwarderMock.get_queue(forwarder)
+    assert Queue.len(queue) == 1
+
+    {{:value, batch}, _} = Queue.out(queue)
+    assert length(batch) == 2
+  end
+
+  @tag dir: "/test-init-no-pointer"
+  test "init with no pointer finds most recent logs", %{forwarder: forwarder} do
+    queue = LogForwarder.Test.ForwarderMock.get_queue(forwarder)
+    assert Queue.len(queue) == 2
+
+    {{:value, batch}, queue} = Queue.out(queue)
+    assert length(batch) == 1
+
+    {{:value, batch}, _} = Queue.out(queue)
+    assert length(batch) == 1
+  end
 end

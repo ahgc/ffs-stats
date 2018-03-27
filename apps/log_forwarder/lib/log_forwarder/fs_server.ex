@@ -13,7 +13,10 @@ defmodule LogForwarder.FsServer do
   # Will store the last file and line read in the log directory with this name.
   @state_file_name ".ffs_stats_log_forwarder_head"
 
+  # We mock out the entire File module in tests
   @file_reader Application.get_env(:fs_server, :file_reader, File)
+
+  @report_name_pattern ~r/missionReport\(([0-9_-]*)\)\[(\d*)\]\.txt/
 
   @doc """
   Start a linked `GenServer` that watches the specified `log_dir` for new logs.
@@ -139,7 +142,8 @@ defmodule LogForwarder.FsServer do
     # Logs names have a format like:
     #   missionReport(YYYY-MM-DD_HH-MM-SS)[NNN].txt
     # Run a regex to extract the timestamp and the index (NNN)
-    with parts <- Regex.run(~r/missionReport\((.*)\)\[(\d*)\]\.txt/, name),
+    with parts <- Regex.run(@report_name_pattern, name),
+         true <- is_list(parts),
          # The first list entry is the whole matched string, so strip that off
          {stamp, idx_str} <- parts |> tl() |> List.to_tuple(),
          {idx, _} = Integer.parse(idx_str)
@@ -213,7 +217,7 @@ defmodule LogForwarder.FsServer do
 
     # Enqueue the messages if we found any.
     if length(batch) > 0 do
-      Logger.info("Enqueuing #{length(batch)} entries from #{log_name(stamp, log_idx)} at #{head_line}")
+      Logger.info("Enqueuing #{length(batch)} entries from #{log_name(stamp, log_idx)} at line #{head_line}")
 
       :ok =
         LogForwarder.Forwarder.enqueue_log_batch(state.forwarder, batch)
