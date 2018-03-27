@@ -12,6 +12,7 @@ defmodule LogForwarder.Forwarder do
 
   # Async send task interval, in ms
   @send_interval 1000
+  @send_interval_backoff 10000
 
   @doc """
   Start a linked `GenServer` that sends queued logs to the specified `remote`.
@@ -62,6 +63,7 @@ defmodule LogForwarder.Forwarder do
   @spec handle_call({:enqueue, [String.t]}, term, map) :: {:reply, :ok, map}
   def handle_call({:enqueue, batch}, _from, state) do
     new_state = Map.update!(state, :buffer, &Queue.in(batch, &1))
+    Logger.info("Enqueued #{length(batch)} logs")
     {:reply, :ok, new_state}
   end
 
@@ -72,22 +74,27 @@ defmodule LogForwarder.Forwarder do
   """
   @spec handle_info(:send_logs, map) :: {:noreply, map}
   def handle_info(:send_logs, state) do
-    new_state = Map.update!(state, :buffer, &send_logs(state, &1))
-    schedule_send()
-    {:noreply, new_state}
+    case send_logs(state, state.buffer) do
+      {:ok, remaining} ->
+        schedule_send()
+        {:noreply, Map.put(state, :buffer, remaining)}
+      :error ->
+        schedule_send(@send_interval_backoff)
+        {:noreply, state}
+    end
   end
 
   # Pop a list of logs off of the queue, if any, and send it to the remote. If
   # the logs were successfully sent, return the new queue. Otherwise, return the
   # original queue unmodified.
-  @spec send_logs(map, Queue.queue) :: Queue.queue
+  @spec send_logs(map, Queue.queue) :: {atom, Queue.queue} | atom
   defp send_logs(state, queue) do
     with {{:value, logs}, remaining} <- Queue.out(queue),
          :ok <- send_batch(state, logs) do
-      remaining
+      {:ok, remaining}
     else
-      :error -> queue
-      {:empty, remaining} -> remaining
+      :error -> :error
+      {:empty, remaining} -> {:ok, remaining}
     end
   end
 
@@ -110,8 +117,8 @@ defmodule LogForwarder.Forwarder do
 
   # Schedule any queued logs to be sent in `@send_interval` milliseconds. Return
   # a reference to the timer task.
-  @spec schedule_send() :: reference
-  defp schedule_send() do
-    Process.send_after(self(), :send_logs, @send_interval)
+  @spec schedule_send(non_neg_integer) :: reference
+  defp schedule_send(delay \\ @send_interval) do
+    Process.send_after(self(), :send_logs, delay)
   end
 end

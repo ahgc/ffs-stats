@@ -35,11 +35,6 @@ defmodule LogForwarder.FsServer do
 
     Logger.info("Initializing FsServer at #{log_name(head_stamp, head_idx)}@#{head_line}")
 
-    # TODO: I'm not sure how to make this process wait for the forwarder to
-    # start up so sleeping is the right way to fix that, right? Right? Guys?
-    # (I'm so, so sorry.)
-    # Process.sleep(1000)
-
     # Initialize the state and go ahead and read any available lines.
     state = %{
       forwarder: forwarder,
