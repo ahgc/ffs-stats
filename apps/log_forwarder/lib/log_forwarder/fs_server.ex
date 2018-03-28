@@ -2,12 +2,30 @@ defmodule LogForwarder.FsServer do
   @moduledoc """
   The `LogForwarder.FsServer` module watches a log directory for changes and
   enqueues new log entries to be sent to a remote stats server in order.
+
+  This module makes a lot of assumptions about the logs:
+  - They're all in one directory
+  - They all have a name like `missionReport(timestamp)[idx].txt`
+  - `idx` always starts from 0 and increase by one with each new log
+  - The timestamps are the same for each mission
+  - The timestamps have a format like `%Y-%m-%d_%H-%M-%S`
+  - We'll never write to an older mission
+
+  There are also a few shortcuts taken with the implementation. The biggest one
+  is that we assume that `LogForwarder.Forwarder` will always send the logs,
+  eventually. This can lead to bugs where, if it crashes, we may end up skipping
+  some logs because this module wrote that it had already sent them.
+
+  TODO: Fix this. Maybe pass a callback along with the logs?
   """
 
   use GenServer
 
   require Logger
 
+  @typedoc """
+  Timestamp, log index, and log line number.
+  """
   @type log_pointer :: {String.t, non_neg_integer, non_neg_integer}
 
   # Will store the last file and line read in the log directory with this name.
@@ -16,6 +34,7 @@ defmodule LogForwarder.FsServer do
   # We mock out the entire File module in tests
   @file_reader Application.get_env(:fs_server, :file_reader, File)
 
+  # Regex to match mission log names
   @report_name_pattern ~r/missionReport\(([0-9_-]*)\)\[(\d*)\]\.txt/
 
   @doc """
@@ -180,27 +199,16 @@ defmodule LogForwarder.FsServer do
   end
 
   # Handle an event in which we encounter a new mission stamp.
-  # TODO: figure out what to do here
-  @spec handle_new_stamp(map, String.t, non_neg_integer) :: map
-  defp handle_new_stamp(state, stamp, idx) do
-    IO.puts("NEW STAMP #{stamp}@#{idx}")
+  @spec handle_new_stamp(map, String.t) :: map
+  defp handle_new_stamp(state, stamp) do
     state
+    # Read all remaining entries for this mission
+    |> read_lines()
+    # Update our pointer to point to the first entry in the next mission
+    |> Map.put(:log_pointer, {stamp, 0, 0})
+    # Read everything available for the new mission
+    |> read_lines()
   end
-
-  # @spec handle_new_log(map, non_neg_integer) :: map
-  # defp handle_new_log(state, idx) do
-  #   {_, current_idx, _} = state.log_pointer
-
-  #   update_idx_and_read = fn(idx, s) ->
-  #     Map.update!(
-  #       s, :log_pointer, fn {stamp, _, _} -> {stamp, idx, 0} end)
-  #     |> read_lines()
-  #   end
-
-  #   state
-  #   |> read_lines()
-  #   |> (&Enum.reduce((current_idx+1)..idx, &1, update_idx_and_read)).()
-  # end
 
   # Read any and all available log lines starting from the current head.
   @spec read_lines(map) :: map
@@ -245,12 +253,12 @@ defmodule LogForwarder.FsServer do
 
   # If we've receieved a FS event for the current mission, read any available
   # lines. Otherwise, handle the case where we've started a new mission.
-  @spec read_updates(map, String.t, non_neg_integer) :: map
-  defp read_updates(state, stamp, idx) do
+  @spec read_updates(map, String.t) :: map
+  defp read_updates(state, stamp) do
     {head_stamp, _, _} = state.log_pointer
 
     cond do
-      stamp != head_stamp -> handle_new_stamp(state, stamp, idx)
+      stamp != head_stamp -> handle_new_stamp(state, stamp)
       true -> read_lines(state)
     end
   end
@@ -259,8 +267,8 @@ defmodule LogForwarder.FsServer do
   @spec process_event(map, String.t, atom) :: map
   defp process_event(state, path, :modified) do
     case parse_log_name(path) do
-      {stamp, idx} ->
-        read_updates(state, stamp, idx)
+      {stamp, _idx} ->
+        read_updates(state, stamp)
       :error -> state
     end
   end

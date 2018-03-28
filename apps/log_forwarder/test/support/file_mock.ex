@@ -1,16 +1,6 @@
 defmodule LogForwarder.Test.FileMock do
-  # use GenServer
-
   @stamp "2018-03-25_18-51-45"
   @dummy_event "T:0 AType:15 VER:17"
-
-  # def start_link(_) do
-  #   GenServer.start_link(__MODULE__, nil, name: __MODULE__)
-  # end
-
-  # def init(_) do
-  #   {:ok, %{}}
-  # end
 
   def exists?("/test-init/.ffs_stats_log_forwarder_head"), do: true
   def exists?("/test-init/missionReport(#{@stamp})[1].txt"), do:  false
